@@ -13,20 +13,75 @@ module.exports = {
   restBuffer: [readRestBuffer, writeRestBuffer, sizeOfRestBuffer],
   entityMetadataLoop: [readEntityMetadata, writeEntityMetadata, sizeOfEntityMetadata],
   topBitSetTerminatedArray: [readTopBitSetTerminatedArray, writeTopBitSetTerminatedArray, sizeOfTopBitSetTerminatedArray],
-  lpVec3: [readLpVec3, writeLpVec3, sizeOfLpVec3]
+  lpVec3: [readLpVec3, writeLpVec3, sizeOfLpVec3],
+  nbtOptionalLengthPrefixed: [readNbtOptionalLengthPrefixed, writeNbtOptionalLengthPrefixed, sizeOfNbtOptionalLengthPrefixed]
 }
 const PartialReadError = require('protodef').utils.PartialReadError
 
 function readVarLong (buffer, offset) {
-  return readVarInt(buffer, offset)
+  // 64-bit LEB128 (vanilla VarLong). Uses BigInt for the full range, then narrows the
+  // signed result to a Number to preserve the historical return type.
+  let result = 0n
+  let shift = 0n
+  let cursor = offset
+  while (true) {
+    if (cursor >= buffer.length) throw new PartialReadError('Unexpected buffer end while reading VarLong')
+    const byte = buffer.readUInt8(cursor)
+    result |= (BigInt(byte) & 0x7Fn) << shift
+    cursor++
+    if (!(byte & 0x80)) break
+    shift += 7n
+    if (shift > 63n) throw new PartialReadError('varlong is too big')
+  }
+  if (result > 0x7FFFFFFFFFFFFFFFn) result -= 0x10000000000000000n // two's-complement signed 64
+  // Return a BigInt so the full 64-bit range round-trips exactly (values > 2^53 lose precision as
+  // Number). writeVarLong accepts both Number and BigInt inputs.
+  return { value: result, size: cursor - offset }
 }
 
 function writeVarLong (value, buffer, offset) {
-  return writeVarInt(value, buffer, offset)
+  let v = BigInt.asUintN(64, BigInt(value)) // sign-extend negatives to full 64 bits
+  let cursor = offset
+  do {
+    const byte = v & 0x7Fn
+    v >>= 7n
+    buffer.writeUInt8(Number(byte) | (v ? 0x80 : 0), cursor++)
+  } while (v)
+  return cursor
 }
 
 function sizeOfVarLong (value) {
-  return sizeOfVarInt(value)
+  let v = BigInt.asUintN(64, BigInt(value))
+  let size = 0
+  do {
+    v >>= 7n
+    size++
+  } while (v)
+  return size
+}
+
+// A VarInt byte-length prefix followed by an anonymous NBT tag; length 0 = absent (vanilla
+// ByteBufCodecs.optionalTagCodec(...).apply(lengthPrefixed(...))). The decoded value is the NBT tag
+// object, or undefined when absent.
+function readNbtOptionalLengthPrefixed (buffer, offset) {
+  const { value: len, size: lenSize } = readVarInt(buffer, offset)
+  if (len === 0) return { value: undefined, size: lenSize }
+  const { value } = nbt.proto.read(buffer, offset + lenSize, 'anonymousNbt')
+  return { value, size: lenSize + len }
+}
+
+function writeNbtOptionalLengthPrefixed (value, buffer, offset) {
+  if (value === undefined || value === null) return writeVarInt(0, buffer, offset)
+  const body = nbt.proto.createPacketBuffer('anonymousNbt', value)
+  offset = writeVarInt(body.length, buffer, offset)
+  body.copy(buffer, offset)
+  return offset + body.length
+}
+
+function sizeOfNbtOptionalLengthPrefixed (value) {
+  if (value === undefined || value === null) return sizeOfVarInt(0)
+  const body = nbt.proto.createPacketBuffer('anonymousNbt', value)
+  return sizeOfVarInt(body.length) + body.length
 }
 
 function readUUID (buffer, offset) {

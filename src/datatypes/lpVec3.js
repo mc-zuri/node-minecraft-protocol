@@ -1,7 +1,10 @@
 const [readVarInt, writeVarInt, sizeOfVarInt] = require('protodef').types.varint
 
-const DATA_BITS_MASK = 32767
+// Low-precision Vec3 (vanilla net.minecraft.network.LpVec3). A 48-bit buffer packs a 2-bit scale
+// exponent + 3×15-bit quantized components; the 4-byte "highest" word is big-endian (Netty writeInt),
+// and the buffer/shifts exceed 32 bits, so BigInt is required for a byte-exact round-trip.
 const MAX_QUANTIZED_VALUE = 32766.0
+const DATA_BITS_MASK = 32767n
 const ABS_MIN_VALUE = 3.051944088384301e-5
 const ABS_MAX_VALUE = 1.7179869183e10
 
@@ -14,39 +17,32 @@ function pack (value) {
   return Math.round((value * 0.5 + 0.5) * MAX_QUANTIZED_VALUE)
 }
 
-function unpack (packed, shift) {
-  // We use division by power of 2 to simulate a 64-bit right shift
-  const val = Math.floor(packed / Math.pow(2, shift)) & DATA_BITS_MASK
-  const clamped = val > 32766 ? 32766 : val
-  return (clamped * 2.0) / 32766.0 - 1.0
+function unpack (value) {
+  return Math.min(Number(value & DATA_BITS_MASK), MAX_QUANTIZED_VALUE) * 2.0 / MAX_QUANTIZED_VALUE - 1.0
 }
 
 function readLpVec3 (buffer, offset) {
-  const a = buffer[offset]
-  if (a === 0) {
+  const lowest = buffer.readUInt8(offset)
+  if (lowest === 0) {
     return { value: { x: 0, y: 0, z: 0 }, size: 1 }
   }
+  const middle = buffer.readUInt8(offset + 1)
+  const highest = buffer.readUInt32BE(offset + 2) // Netty writeInt is big-endian
+  const buf = (BigInt(highest) << 16n) | (BigInt(middle) << 8n) | BigInt(lowest)
 
-  const b = buffer[offset + 1]
-  const c = buffer.readUInt32LE(offset + 2)
-
-  // Combine into 48-bit safe integer (up to 2^53 is safe in JS)
-  const packed = (c * 65536) + (b << 8) + a
-
-  let scale = a & 3
+  let scale = BigInt(lowest & 3)
   let size = 6
-
-  if ((a & 4) === 4) {
-    const { value: varIntVal, size: varIntSize } = readVarInt(buffer, offset + 6)
-    scale = (varIntVal * 4) + scale
-    size += varIntSize
+  if ((lowest & 4) === 4) {
+    const { value: cont, size: contSize } = readVarInt(buffer, offset + 6)
+    scale |= (BigInt(cont >>> 0)) << 2n
+    size += contSize
   }
-
+  const sc = Number(scale)
   return {
     value: {
-      x: unpack(packed, 3) * scale,
-      y: unpack(packed, 18) * scale,
-      z: unpack(packed, 33) * scale
+      x: unpack(buf >> 3n) * sc,
+      y: unpack(buf >> 18n) * sc,
+      z: unpack(buf >> 33n) * sc
     },
     size
   }
@@ -56,48 +52,38 @@ function writeLpVec3 (value, buffer, offset) {
   const x = sanitize(value.x)
   const y = sanitize(value.y)
   const z = sanitize(value.z)
+  const chessboardLength = Math.max(Math.abs(x), Math.abs(y), Math.abs(z))
 
-  const max = Math.max(Math.abs(x), Math.abs(y), Math.abs(z))
-
-  if (max < ABS_MIN_VALUE) {
-    buffer[offset] = 0
+  if (chessboardLength < ABS_MIN_VALUE) {
+    buffer.writeUInt8(0, offset)
     return offset + 1
   }
 
-  const scale = Math.ceil(max)
-  const needsContinuation = (scale & 3) !== scale
-  const scaleByte = needsContinuation ? ((scale & 3) | 4) : (scale & 3)
+  const scale = BigInt(Math.ceil(chessboardLength)) // Mth.ceilLong
+  const sc = Number(scale)
+  const isPartial = (scale & 3n) !== scale
+  const markers = isPartial ? ((scale & 3n) | 4n) : scale
+  const buf = markers |
+    (BigInt(pack(x / sc)) << 3n) |
+    (BigInt(pack(y / sc)) << 18n) |
+    (BigInt(pack(z / sc)) << 33n)
 
-  const pX = pack(x / scale)
-  const pY = pack(y / scale)
-  const pZ = pack(z / scale)
+  buffer.writeUInt8(Number(buf & 0xFFn), offset)
+  buffer.writeUInt8(Number((buf >> 8n) & 0xFFn), offset + 1)
+  buffer.writeUInt32BE(Number((buf >> 16n) & 0xFFFFFFFFn), offset + 2)
 
-  // Layout:
-  // [Z (15)] [Y (15)] [X (15)] [Flags (3)]
-
-  // low32 contains Flags(3), X(15), and the first 14 bits of Y (3+15+14 = 32)
-  const low32 = (scaleByte | (pX << 3) | (pY << 18)) >>> 0
-
-  // high16 contains the 15th bit of Y and all 15 bits of Z
-  const high16 = ((pY >> 14) & 0x01) | (pZ << 1)
-
-  buffer.writeUInt32LE(low32, offset)
-  buffer.writeUInt16LE(high16, offset + 4)
-
-  if (needsContinuation) {
-    return writeVarInt(Math.floor(scale / 4), buffer, offset + 6)
+  if (isPartial) {
+    return writeVarInt(Number(scale >> 2n), buffer, offset + 6)
   }
-
   return offset + 6
 }
 
 function sizeOfLpVec3 (value) {
-  const max = Math.max(Math.abs(value.x), Math.abs(value.y), Math.abs(value.z))
-  if (max < ABS_MIN_VALUE) return 1
-
-  const scale = Math.ceil(max)
-  if ((scale & 3) !== scale) {
-    return 6 + sizeOfVarInt(Math.floor(scale / 4))
+  const chessboardLength = Math.max(Math.abs(value.x), Math.abs(value.y), Math.abs(value.z))
+  if (chessboardLength < ABS_MIN_VALUE) return 1
+  const scale = BigInt(Math.ceil(chessboardLength))
+  if ((scale & 3n) !== scale) {
+    return 6 + sizeOfVarInt(Number(scale >> 2n))
   }
   return 6
 }

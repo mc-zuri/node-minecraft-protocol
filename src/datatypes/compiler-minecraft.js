@@ -71,7 +71,8 @@ if (n !== 0) {
   }
     `.trim())
     }],
-    lpVec3: ['native', minecraft.lpVec3[0]]
+    lpVec3: ['native', minecraft.lpVec3[0]],
+    nbtOptionalLengthPrefixed: ['native', minecraft.nbtOptionalLengthPrefixed[0]]
   },
   Write: {
     varlong: ['native', minecraft.varlong[1]],
@@ -111,7 +112,7 @@ if (n !== 0) {
 if (${baseName} != null) {
   offset = ${compiler.callType(`${baseName} + 1`, 'varint')}
 } else if (${otherwiseName}) {
-  offset += 1
+  buffer[offset++] = 0
   offset = ${compiler.callType(`${otherwiseName}`, opts.otherwise.type)}
 } else {
   throw new Error('registryEntryHolder type requires "${baseName}" or "${otherwiseName}" fields to be set')
@@ -137,7 +138,8 @@ if (${baseName} != null) {
 return offset
     `.trim())
     }],
-    lpVec3: ['native', minecraft.lpVec3[1]]
+    lpVec3: ['native', minecraft.lpVec3[1]],
+    nbtOptionalLengthPrefixed: ['native', minecraft.nbtOptionalLengthPrefixed[1]]
   },
   SizeOf: {
     varlong: ['native', minecraft.varlong[2]],
@@ -197,6 +199,7 @@ if (${baseName} != null) {
 return size
       `.trim())
     }],
-    lpVec3: ['native', minecraft.lpVec3[2]]
+    lpVec3: ['native', minecraft.lpVec3[2]],
+    nbtOptionalLengthPrefixed: ['native', minecraft.nbtOptionalLengthPrefixed[2]]
   }
 }
