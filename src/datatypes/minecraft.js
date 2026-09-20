@@ -3,7 +3,7 @@
 const nbt = require('prismarine-nbt')
 const UUID = require('uuid-1345')
 const zlib = require('zlib')
-const [readVarInt, writeVarInt, sizeOfVarInt] = require('protodef').types.varint
+const [readVarInt64, writeVarInt64, sizeOfVarInt64] = require('protodef').types.varint64
 const [readLpVec3, writeLpVec3, sizeOfLpVec3] = require('./lpVec3')
 const [readVecDelta, writeVecDelta, sizeOfVecDelta] = require('./vecDelta')
 
@@ -19,16 +19,18 @@ module.exports = {
 }
 const PartialReadError = require('protodef').utils.PartialReadError
 
+// varint64 is unsigned: a negative long travels as its 64-bit two's complement
 function readVarLong (buffer, offset) {
-  return readVarInt(buffer, offset)
+  const { value, size } = readVarInt64(buffer, offset)
+  return { value: BigInt.asIntN(64, value), size }
 }
 
 function writeVarLong (value, buffer, offset) {
-  return writeVarInt(value, buffer, offset)
+  return writeVarInt64(BigInt.asUintN(64, BigInt(value)), buffer, offset)
 }
 
 function sizeOfVarLong (value) {
-  return sizeOfVarInt(value)
+  return sizeOfVarInt64(BigInt.asUintN(64, BigInt(value)))
 }
 
 function readUUID (buffer, offset) {
