@@ -5,6 +5,7 @@ const framing = require('./transforms/framing')
 const states = require('./states')
 const debug = require('debug')('minecraft-protocol')
 const debugSkip = process.env.DEBUG_SKIP?.split(',') ?? []
+const bigIntToString = (key, value) => typeof value === 'bigint' ? value.toString() : value
 
 const createSerializer = require('./transforms/serializer').createSerializer
 const createDeserializer = require('./transforms/serializer').createDeserializer
@@ -92,7 +93,7 @@ class Client extends EventEmitter {
       parsed.metadata.state = state
       if (debug.enabled && !debugSkip.includes(parsed.metadata.name)) {
         debug('read packet ' + state + '.' + parsed.metadata.name)
-        const s = JSON.stringify(parsed.data, null, 2)
+        const s = JSON.stringify(parsed.data, bigIntToString, 2)
         debug(s && s.length > 10000 ? parsed.data : s)
       }
       if (this._hasBundlePacket && parsed.metadata.name === 'bundle_delimiter') {
