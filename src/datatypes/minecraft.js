@@ -3,7 +3,7 @@
 const nbt = require('prismarine-nbt')
 const UUID = require('uuid-1345')
 const zlib = require('zlib')
-const [readVarInt, writeVarInt, sizeOfVarInt] = require('protodef').types.varint
+const [, writeVarInt, sizeOfVarInt] = require('protodef').types.varint
 const [readLpVec3, writeLpVec3, sizeOfLpVec3] = require('./lpVec3')
 const [readVecDelta, writeVecDelta, sizeOfVecDelta] = require('./vecDelta')
 
@@ -19,16 +19,59 @@ module.exports = {
 }
 const PartialReadError = require('protodef').utils.PartialReadError
 
+// vanilla's VarLong: a signed 64-bit long written as up to 10 groups of 7 bits, two's complement (a negative long
+// always takes 10 bytes). Read as a Number while it is a safe integer (every value a 32-bit varint read got right
+// stays a Number, so `record >> 12` and the like keep working), as a BigInt beyond that. Written from a Number,
+// a BigInt or protodef's [hi, lo] i64 pair.
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER)
+
 function readVarLong (buffer, offset) {
-  return readVarInt(buffer, offset)
+  let cursor = offset
+  // up to 4 bytes (28 bits): plain Number arithmetic
+  let result = 0
+  for (let shift = 0; shift < 28; shift += 7) {
+    if (cursor >= buffer.length) throw new PartialReadError('Unexpected buffer end while reading VarLong')
+    const byte = buffer[cursor++]
+    result |= (byte & 0x7F) << shift
+    if (!(byte & 0x80)) return { value: result, size: cursor - offset }
+  }
+  let big = BigInt(result)
+  for (let shift = 28n; ; shift += 7n) {
+    if (shift > 63n) throw new Error('VarLong is too big')
+    if (cursor >= buffer.length) throw new PartialReadError('Unexpected buffer end while reading VarLong')
+    const byte = buffer[cursor++]
+    big |= BigInt(byte & 0x7F) << shift
+    if (!(byte & 0x80)) break
+  }
+  big = BigInt.asIntN(64, big)
+  return { value: (big <= MAX_SAFE && big >= -MAX_SAFE) ? Number(big) : big, size: cursor - offset }
+}
+
+function toUnsignedLong (value) {
+  if (Array.isArray(value)) value = (BigInt(value[0]) << 32n) | BigInt(value[1] >>> 0)
+  return BigInt.asUintN(64, BigInt(value))
 }
 
 function writeVarLong (value, buffer, offset) {
-  return writeVarInt(value, buffer, offset)
+  if (typeof value === 'number' && value >= 0 && value <= 0x7FFFFFFF) return writeVarInt(value, buffer, offset)
+  let v = toUnsignedLong(value)
+  while (v > 0x7Fn) {
+    buffer.writeUInt8(Number(v & 0x7Fn) | 0x80, offset++)
+    v >>= 7n
+  }
+  buffer.writeUInt8(Number(v), offset++)
+  return offset
 }
 
 function sizeOfVarLong (value) {
-  return sizeOfVarInt(value)
+  if (typeof value === 'number' && value >= 0 && value <= 0x7FFFFFFF) return sizeOfVarInt(value)
+  let v = toUnsignedLong(value)
+  let size = 1
+  while (v > 0x7Fn) {
+    v >>= 7n
+    size++
+  }
+  return size
 }
 
 function readUUID (buffer, offset) {
