@@ -201,8 +201,10 @@ function readTopBitSetTerminatedArray (buffer, offset, { type }) {
   while (true) {
     if (offset + 1 > buffer.length) { throw new PartialReadError() }
     item = buffer.readUInt8(cursor)
-    buffer[cursor] = buffer[cursor] & 127 // removes top bit
-    const results = this.read(buffer, cursor, type, {})
+    // the element reads its first byte without the top bit; the caller's buffer gets it back afterwards
+    buffer[cursor] = item & 127
+    let results
+    try { results = this.read(buffer, cursor, type, {}) } finally { buffer[cursor] = item }
     values.push(results.value)
     cursor += results.size
     if ((item & 128) === 0) { // check if top bit is set, if not last value

@@ -34,8 +34,10 @@ module.exports = {
       code += 'const data = []\n'
       code += 'while (true) {\n'
       code += '  const item = ctx.u8(buffer, cursor).value\n'
-      code += '  buffer[cursor] = buffer[cursor] & 127\n'
-      code += '  const elem = ' + compiler.callType(type, 'cursor') + '\n'
+      // the element reads its first byte without the top bit; the caller's buffer gets it back afterwards
+      code += '  buffer[cursor] = item & 127\n'
+      code += '  let elem\n'
+      code += '  try { elem = ' + compiler.callType(type, 'cursor') + ' } finally { buffer[cursor] = item }\n'
       code += '  data.push(elem.value)\n'
       code += '  cursor += elem.size\n'
       code += '  if ((item & 128) === 0) return { value: data, size: cursor - offset }\n'
