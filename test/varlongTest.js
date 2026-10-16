@@ -44,4 +44,22 @@ describe('varlong', () => {
     const written = mc.createSerializer({ state: 'play', isServer: true, version: '26.3' }).createPacketBuffer(packet.data)
     assert.strictEqual(written.toString('hex'), bytes.toString('hex'))
   })
+
+  // sitting camels (pose 10) as the physics recorder captured them: LAST_POSE_CHANGE_TICK is entity data 19 there
+  const CAMELS = [
+    ['1.21.1', '586c06150a1302b4daffffffffffffff01ff', -4812],
+    ['1.21.6', '5c2c06150a1302f9f6ffffffffffffff01ff', -1159],
+    ['1.21.8', '5c2f06150a1302fdf6ffffffffffffff01ff', -1155],
+    ['1.21.9', '612106140a130282f7ffffffffffffff01ff', -1150]
+  ]
+  for (const [version, hex, tick] of CAMELS) {
+    it(`round-trips a ${version} camel's entity data byte for byte`, () => {
+      const bytes = Buffer.from(hex, 'hex')
+      const packet = mc.createDeserializer({ state: 'play', isServer: false, version }).parsePacketBuffer(bytes)
+      assert.strictEqual(packet.metadata.size, bytes.length)
+      assert.deepStrictEqual(packet.data.params.metadata[1], { key: 19, type: 'long', value: tick })
+      const written = mc.createSerializer({ state: 'play', isServer: true, version }).createPacketBuffer(packet.data)
+      assert.strictEqual(written.toString('hex'), hex)
+    })
+  }
 })
